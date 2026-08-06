@@ -1,0 +1,42 @@
+[
+  {
+    "id": "leader_all",
+    "title": "주도주 ALL-IN-ONE",
+    "notebook": "notebooks/01_leader_all_in_one.ipynb",
+    "total_timeout_seconds": 3000,
+    "cell_timeout_seconds": 900,
+    "send_globs": ["*.csv", "notebook_output.txt", "runner.log"]
+  },
+  {
+    "id": "alt_bull",
+    "title": "알트불장 화재경보기",
+    "notebook": "notebooks/02_alt_bull_fire_alarm.ipynb",
+    "total_timeout_seconds": 1200,
+    "cell_timeout_seconds": 600,
+    "send_globs": ["*.csv", "notebook_output.txt", "runner.log"]
+  },
+  {
+    "id": "news",
+    "title": "코인·한국·미국 뉴스",
+    "notebook": "notebooks/03_market_news.ipynb",
+    "total_timeout_seconds": 900,
+    "cell_timeout_seconds": 300,
+    "send_globs": ["notebook_output.txt", "runner.log"]
+  },
+  {
+    "id": "leader_collection",
+    "title": "주도주 개별전략 모음",
+    "notebook": "notebooks/04_leader_strategy_collection.ipynb",
+    "total_timeout_seconds": 4200,
+    "cell_timeout_seconds": 900,
+    "send_globs": ["*.csv", "notebook_output.txt", "runner.log"]
+  },
+  {
+    "id": "crypto_collection",
+    "title": "코인 전략 모음",
+    "notebook": "notebooks/05_crypto_strategy_collection.ipynb",
+    "total_timeout_seconds": 4200,
+    "cell_timeout_seconds": 900,
+    "send_globs": ["*.csv", "*.json", "notebook_output.txt", "runner.log"]
+  }
+]
