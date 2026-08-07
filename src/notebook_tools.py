@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import html as html_lib
 import json
 import os
 import re
@@ -19,6 +20,8 @@ from .config import JobConfig
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+PROGRESS_RE = re.compile(r"\b\d+\s*/\s*\d+\b.*(?:it/s|s/it|<\d{2}:\d{2}|\d+%\|)", re.I)
+PERCENT_BAR_RE = re.compile(r"\b\d{1,3}%\|.*\|\s*\d+\s*/\s*\d+", re.I)
 
 
 @dataclass
@@ -43,7 +46,8 @@ class NotebookResult:
 
 
 def strip_ansi(text: str) -> str:
-    return ANSI_RE.sub("", text).replace("\r", "")
+    # tqdm는 같은 줄을 \r로 덮어쓰므로 \r을 없애 붙이지 말고 줄바꿈으로 바꾼다.
+    return ANSI_RE.sub("", text).replace("\r", "\n")
 
 
 def _remove_shell_magics(source: str) -> str:
@@ -70,7 +74,6 @@ def _remove_shell_magics(source: str) -> str:
 
 def _patch_source(source: str) -> str:
     source = _remove_shell_magics(source)
-    # Colab 전용 절대경로 및 로컬 캐시 경로를 GitHub Actions state로 이동.
     source = source.replace(
         'Path("/content/alt_fire_alarm_history.csv")',
         'Path(os.environ.get("ALT_FIRE_HISTORY_FILE", "alt_fire_alarm_history.csv"))',
@@ -80,7 +83,6 @@ def _patch_source(source: str) -> str:
         'CACHE_FILE = os.environ.get("OBV_CACHE_FILE", "obv_cache.json")',
         source,
     )
-    # notebook 환경에서 tqdm.notebook가 위젯 경고를 내는 경우가 있어 표준 tqdm으로 치환.
     source = source.replace("from tqdm.notebook import tqdm", "from tqdm.auto import tqdm")
     return source
 
@@ -179,6 +181,24 @@ def execute_prepared_notebook(
     return proc.returncode, strip_ansi(output), timed_out
 
 
+def _html_table_to_text(raw_html: str) -> str:
+    """Jupyter Styler/DataFrame HTML을 텔레그램 요약에 쓸 수 있는 간단한 TSV로 변환."""
+    if "<table" not in raw_html.lower():
+        return ""
+    text = re.sub(r"(?is)<br\s*/?>", " ", raw_html)
+    text = re.sub(r"(?is)</tr\s*>", "\n", text)
+    text = re.sub(r"(?is)</t[dh]\s*>", "\t", text)
+    text = re.sub(r"(?is)<[^>]+>", "", text)
+    text = html_lib.unescape(text)
+    rows: list[str] = []
+    for row in text.splitlines():
+        cells = [re.sub(r"\s+", " ", c).strip() for c in row.split("\t")]
+        cells = [c for c in cells if c]
+        if cells:
+            rows.append(" | ".join(cells))
+    return "\n".join(rows)
+
+
 def extract_notebook_output(executed_path: Path) -> tuple[str, int]:
     if not executed_path.is_file():
         return "", 0
@@ -200,63 +220,244 @@ def extract_notebook_output(executed_path: Path) -> tuple[str, int]:
                 chunks.append(f"\n[CELL {cell_index} ERROR] {ename}: {evalue}\n{traceback}\n")
             elif output_type in {"display_data", "execute_result"}:
                 data = output.get("data", {})
-                plain = data.get("text/plain")
-                if plain:
-                    chunks.append(str(plain) + "\n")
+                plain = str(data.get("text/plain") or "")
+                raw_html = str(data.get("text/html") or "")
+                # pandas Styler의 text/plain은 메모리 주소만 보여준다. 이때 HTML 표를 텍스트화한다.
+                if "pandas.io.formats.style.Styler" in plain and raw_html:
+                    table = _html_table_to_text(raw_html)
+                    if table:
+                        chunks.append(table + "\n")
+                elif plain:
+                    chunks.append(plain + "\n")
+                elif raw_html:
+                    table = _html_table_to_text(raw_html)
+                    if table:
+                        chunks.append(table + "\n")
     text = strip_ansi("".join(chunks))
     return text, error_count
 
 
-def _line_subset(lines: list[str], keywords: tuple[str, ...], limit: int = 80) -> list[str]:
-    selected: list[str] = []
-    for line in lines:
-        s = line.strip()
-        if not s:
+def _is_noise_line(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return True
+    if PERCENT_BAR_RE.search(s) or PROGRESS_RE.search(s):
+        return True
+    if any(token in s for token in (
+        "조건 검증 중:", "종목 분석 중:", "바닥 다지기 종목 분석 중:",
+        "진행:", "스크리닝을 시작합니다", "스크리닝 시작", "분석 중...",
+        "구글 뉴스에서", "▶ runner job:", "▶ python:",
+    )):
+        return True
+    if s.startswith("<pandas.io.formats.style.Styler"):
+        return True
+    if re.match(r"^\d+단계:\s*.*(?:수집|분석)", s):
+        return True
+    if re.match(r"^\d+\s*/\s*\d+\s+\S+\s+완료$", s):
+        return True
+    # 진행률 블록 문자와 숫자만 잔뜩 남는 줄
+    if ("█" in s or "▏" in s or "▎" in s or "▍" in s or "▋" in s) and re.search(r"\d+\s*/\s*\d+", s):
+        return True
+    return False
+
+
+def _clean_lines(text: str) -> list[str]:
+    out: list[str] = []
+    for raw in text.splitlines():
+        s = re.sub(r"\s+", " ", raw).strip()
+        if _is_noise_line(s):
             continue
-        if any(k in s for k in keywords):
-            selected.append(s)
-    # 중복 제거, 순서 유지
-    deduped = list(dict.fromkeys(selected))
-    return deduped[:limit]
+        # 긴 구분선은 텔레그램에 가치가 없음
+        if len(s) >= 20 and set(s) <= {"=", "-", "─", " ", "_"}:
+            continue
+        out.append(s)
+    return out
+
+
+def _dedupe(lines: list[str]) -> list[str]:
+    return list(dict.fromkeys(x for x in lines if x.strip()))
+
+
+def _format_duration(seconds: float) -> str:
+    seconds_i = int(round(seconds))
+    if seconds_i < 60:
+        return f"{seconds_i}초"
+    m, s = divmod(seconds_i, 60)
+    return f"{m}분 {s}초"
+
+
+def _summary_news(lines: list[str]) -> list[str]:
+    keep: list[str] = []
+    category = None
+    count = 0
+    for line in lines:
+        if line.startswith("[") and "뉴스 TOP 5" in line:
+            category = line
+            count = 0
+            keep.append("\n📰 " + line.strip("[]"))
+            continue
+        if category and line.startswith("-"):
+            if count < 5:
+                keep.append("• " + line.lstrip("- "))
+                count += 1
+            continue
+        if category and (line.startswith("🔗") or line.startswith("http://") or line.startswith("https://")):
+            keep.append("  " + line)
+    return keep
+
+
+def _summary_alt(lines: list[str]) -> list[str]:
+    keys = (
+        "현재 단계", "화재 점수", "데이터 범위", "데이터 신뢰도", "Binance 보조검사",
+        "점수 변화", "판정 설명", "기준 시각", "Binance 조회 실패/대체",
+    )
+    keep = [line for line in lines if any(k in line for k in keys)]
+    notes = [line for line in lines if line.startswith("•")][:3]
+    if notes:
+        keep.append("\n📌 해석")
+        keep.extend(notes)
+    candidates = [line for line in lines if line.startswith("🔥 ") and "| 점화 " in line][:5]
+    if candidates:
+        keep.append("\n🔥 불꽃 후보 TOP 5")
+        keep.extend(candidates)
+    return _dedupe(keep)
+
+
+def _take_table_after(lines: list[str], start: int, max_rows: int = 5) -> list[str]:
+    rows: list[str] = []
+    for line in lines[start + 1 : start + 12]:
+        if "결과]" in line or "적합도" in line or line.startswith("🎯"):
+            break
+        if "없습니다" in line or "데이터 로드 실패" in line:
+            rows.append(line)
+            break
+        if " | " in line:
+            rows.append(line)
+            if len(rows) >= max_rows + 1:  # 헤더 + 상위 N행
+                break
+    return rows
+
+
+def _summary_leader_collection(lines: list[str]) -> list[str]:
+    keep: list[str] = []
+    for i, line in enumerate(lines):
+        if any(tag in line for tag in (
+            "[종가배팅 필터링 결과]", "[눌림목 지지 필터링 결과]", "돌파 종가마감 결과]",
+            "장대양봉 종가강세 결과]", "[영상 참조:", "[순환매 선취매 타점:",
+        )):
+            keep.append("\n📌 " + line.strip("🔥📊 "))
+            keep.extend(_take_table_after(lines, i, 5))
+        elif any(tag in line for tag in (
+            "🟢 [추천]", "🟡 [주의]", "🔴 [비추천]", "스윙 적합도 점수:",
+            "🟡 [선별 진입]", "🔴 [관망]", "주요 추세 이탈 신호 없음",
+            "보유자 경고 신호", "데이터 로드 실패:",
+        )):
+            keep.append(line)
+        elif "조건" in line and "만족하는 종목이 없습니다" in line:
+            keep.append(line)
+    return _dedupe(keep)[:45]
+
+
+def _summary_crypto(lines: list[str]) -> list[str]:
+    keep: list[str] = []
+
+    # OBV / 휩소는 상위 후보 몇 개만 보여준다. 전체 수십 종목 표는 보내지 않는다.
+    for i, line in enumerate(lines):
+        if line.startswith("전체 분석:"):
+            keep.append("\n📌 OBV 매집 스크리너")
+            keep.append(line)
+            rows = []
+            for x in lines[i + 1 : i + 10]:
+                if x.startswith("[") or "※" in x:
+                    break
+                if x and not _is_noise_line(x):
+                    rows.append(x)
+            keep.extend(rows[:4])  # 헤더 + TOP3 정도
+        elif line.startswith("휩소 후보:"):
+            keep.append("\n📌 휩소 후보")
+            keep.append(line)
+            rows = []
+            for x in lines[i + 1 : i + 10]:
+                if x.startswith("[") or "※" in x:
+                    break
+                if x and not _is_noise_line(x):
+                    rows.append(x)
+            keep.extend(rows[:4])
+
+    # 전략별 핵심 판정만 수집
+    signal_lines = [x for x in lines if "현재신호=" in x and "현재신호=없음" not in x]
+    if signal_lines:
+        keep.append("\n📌 평균회귀 현재 신호")
+        keep.extend(signal_lines[:6])
+    elif any("횡보장 평균회귀 백테스트" in x for x in lines):
+        keep.append("\n📌 평균회귀: 현재 즉시 신호 없음")
+
+    for line in lines:
+        if any(tag in line for tag in (
+            "강함★★★ 0개", "※ 강함★★★", "조건 만족 후보 없음",
+            "[시장 종합]", ">>>", "✓ 숏 진입 자격 통과:",
+            "✓ 롱 진입 자격 통과:", "지금 숏 진입 자격을 통과한 종목이 없습니다",
+            "지금 롱 진입 자격을 통과한 종목이 없습니다", "롱 자격 종목 없음",
+        )):
+            if "[등급]" not in line:
+                keep.append(line)
+
+    # 실제 자격 통과 블록만: 부적격 사유 10개를 Telegram에 쏟지 않는다.
+    for i, line in enumerate(lines):
+        if not line.startswith("──"):
+            continue
+        window = lines[i + 1 : i + 12]
+        if not any("✓" in x and ("롱" in x or "숏" in x or "추세 확인" in x) for x in window):
+            continue
+        keep.append("\n🎯 " + line.lstrip("─ "))
+        for x in window:
+            if any(k in x for k in ("✓", "진입가:", "손절가:", "익절가:", "리스크%:", "손익비:")):
+                keep.append(x)
+
+    failures = [x for x in lines if " 실패:" in x or "조회 실패:" in x]
+    if failures:
+        keep.append(f"\n⚠️ 데이터 조회 실패 {len(failures)}건 — 해당 종목은 판정에서 제외")
+
+    return _dedupe(keep)[:60]
+
+
+def _summary_leader_all(lines: list[str]) -> list[str]:
+    keys = (
+        "ALL-IN-ONE 실행 요약", "종목목록:", "가격 다운로드:", "종가배팅 레짐:",
+        "스윙 레짐:", "최종 후보:", "다운로드 실패율", "오늘 7개 전략",
+    )
+    return _dedupe([line for line in lines if any(k in line for k in keys)])[:25]
 
 
 def build_summary(job: JobConfig, status: str, duration: float, text: str, error_count: int, files: list[Path]) -> str:
-    lines = text.splitlines()
-    picked: list[str]
+    lines = _clean_lines(text)
+
     if job.id == "news":
-        picked = _line_subset(lines, ("[코인 뉴스", "[한국 증시 뉴스", "[미국 증시 뉴스", "- "), 40)
+        picked = _summary_news(lines)
     elif job.id == "alt_bull":
-        picked = _line_subset(
-            lines,
-            ("현재 단계", "화재 점수", "데이터 범위", "Binance 보조검사", "점수 변화", "판정 설명", "기준 시각", "•"),
-            30,
-        )
+        picked = _summary_alt(lines)
     elif job.id == "leader_all":
-        picked = _line_subset(
-            lines,
-            ("ALL-IN-ONE", "종목목록", "가격 다운로드", "종가배팅 레짐", "스윙 레짐", "최종 후보", "실패율", "결과 CSV", "오류 CSV"),
-            30,
-        )
+        picked = _summary_leader_all(lines)
     elif job.id == "leader_collection":
-        picked = _line_subset(lines, ("최종", "후보", "포착", "통과", "추천", "관망", "경고", "실패", "종목"), 45)
+        picked = _summary_leader_collection(lines)
     else:
-        picked = _line_subset(lines, ("레짐", "신호", "후보", "진입", "자격", "LONG", "SHORT", "롱", "숏", "오류", "실패", "종목"), 55)
+        picked = _summary_crypto(lines)
 
     if not picked:
-        nonempty = [x.strip() for x in lines if x.strip()]
-        picked = nonempty[-20:]
+        picked = [x for x in lines[-15:] if not _is_noise_line(x)]
 
-    file_names = [p.name for p in files if p.is_file()]
+    icon = {"SUCCESS": "✅", "PARTIAL": "⚠️", "FAILED": "❌", "TIMEOUT": "⏱️"}.get(status, "ℹ️")
     header = [
-        f"[{job.title}]",
-        f"상태: {status} | 실행 {duration:.1f}초 | 셀 오류 {error_count}개",
+        f"{icon} [{job.title}]",
+        f"상태 {status} · 실행 {_format_duration(duration)} · 셀 오류 {error_count}개",
     ]
-    if file_names:
-        header.append("생성파일: " + ", ".join(file_names[:8]))
-    body = "\n".join(picked)
-    summary = "\n".join(header + ([body] if body else []))
-    if len(summary) > 3300:
-        summary = summary[:3250] + "\n…(나머지는 첨부 로그 확인)"
+    if status in {"FAILED", "TIMEOUT"}:
+        header.append("디버그 로그는 실패한 경우에만 별도 첨부합니다.")
+
+    body = "\n".join(picked).strip()
+    summary = "\n".join(header + (["", body] if body else []))
+    if len(summary) > 3400:
+        summary = summary[:3350].rstrip() + "\n… 핵심 결과만 표시했습니다."
     return summary
 
 

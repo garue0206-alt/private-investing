@@ -27,21 +27,25 @@ def parse_args() -> argparse.Namespace:
 
 
 def choose_attachments(result: NotebookResult) -> list[Path]:
+    """Telegram은 읽기 좋은 요약을 본문으로 보내고, 의미 있는 결과 파일만 첨부한다.
+
+    성공/부분성공 시 notebook_output.txt와 runner.log를 보내지 않는다.
+    이 두 파일에는 tqdm 진행률·전체 종목 검사 로그가 들어 있어 모바일에서 매우 지저분하다.
+    실패/시간초과일 때만 디버깅을 위해 로그를 첨부한다.
+    """
     candidates = [Path(x) for x in result.files]
     preferred: list[Path] = []
     data_suffixes = {".csv", ".json", ".xlsx", ".png", ".pdf"}
     for path in candidates:
         if path.suffix.lower() in data_suffixes and path.name != "result.json":
             preferred.append(path)
-    if result.status != "SUCCESS":
-        for name in ("notebook_output.txt", "runner.log"):
+
+    if result.status in {"FAILED", "TIMEOUT"}:
+        for name in ("runner.log", "notebook_output.txt"):
             path = Path(result.run_dir) / name
             if path.is_file() and path not in preferred:
                 preferred.append(path)
-    elif not preferred:
-        path = Path(result.output_text_file)
-        if path.is_file():
-            preferred.append(path)
+
     return preferred[:6]
 
 
