@@ -5,7 +5,11 @@
     "notebook": "notebooks/01_leader_all_in_one.ipynb",
     "total_timeout_seconds": 3000,
     "cell_timeout_seconds": 900,
-    "send_globs": ["*.csv", "notebook_output.txt", "runner.log"]
+    "send_globs": [
+      "*.csv",
+      "notebook_output.txt",
+      "runner.log"
+    ]
   },
   {
     "id": "alt_bull",
@@ -13,7 +17,11 @@
     "notebook": "notebooks/02_alt_bull_fire_alarm.ipynb",
     "total_timeout_seconds": 1200,
     "cell_timeout_seconds": 600,
-    "send_globs": ["*.csv", "notebook_output.txt", "runner.log"]
+    "send_globs": [
+      "*.csv",
+      "notebook_output.txt",
+      "runner.log"
+    ]
   },
   {
     "id": "news",
@@ -21,7 +29,10 @@
     "notebook": "notebooks/03_market_news.ipynb",
     "total_timeout_seconds": 900,
     "cell_timeout_seconds": 300,
-    "send_globs": ["notebook_output.txt", "runner.log"]
+    "send_globs": [
+      "notebook_output.txt",
+      "runner.log"
+    ]
   },
   {
     "id": "leader_collection",
@@ -29,7 +40,11 @@
     "notebook": "notebooks/04_leader_strategy_collection.ipynb",
     "total_timeout_seconds": 4200,
     "cell_timeout_seconds": 900,
-    "send_globs": ["*.csv", "notebook_output.txt", "runner.log"]
+    "send_globs": [
+      "*.csv",
+      "notebook_output.txt",
+      "runner.log"
+    ]
   },
   {
     "id": "crypto_collection",
@@ -37,6 +52,23 @@
     "notebook": "notebooks/05_crypto_strategy_collection.ipynb",
     "total_timeout_seconds": 4200,
     "cell_timeout_seconds": 900,
-    "send_globs": ["*.csv", "*.json", "notebook_output.txt", "runner.log"]
+    "send_globs": [
+      "*.csv",
+      "*.json",
+      "notebook_output.txt",
+      "runner.log"
+    ]
+  },
+  {
+    "id": "lowfloat_fire",
+    "title": "품절주 테마 화재경보기",
+    "notebook": "notebooks/06_theme_fire_alarm.ipynb",
+    "total_timeout_seconds": 4200,
+    "cell_timeout_seconds": 1800,
+    "send_globs": [
+      "theme_fire_alarm_*.csv",
+      "notebook_output.txt",
+      "runner.log"
+    ]
   }
 ]

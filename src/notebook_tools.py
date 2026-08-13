@@ -338,6 +338,158 @@ def _take_table_after(lines: list[str], start: int, max_rows: int = 5) -> list[s
     return rows
 
 
+def _extract_tg_records(text: str) -> list[dict[str, Any]]:
+    """노트북이 명시적으로 출력한 Telegram용 JSON 레코드를 읽는다.
+
+    console/Jupyter 표를 추측해서 파싱하는 것보다 안정적이다.
+    """
+    records: list[dict[str, Any]] = []
+    for raw in strip_ansi(text).splitlines():
+        line = raw.strip()
+        if not line.startswith("__TG__"):
+            continue
+        try:
+            obj = json.loads(line[len("__TG__"):])
+            if isinstance(obj, dict):
+                records.append(obj)
+        except Exception:
+            continue
+    return records
+
+
+def _fmt_candidate(row: dict[str, Any], rank: int) -> str:
+    name = str(row.get("종목명") or row.get("Name") or row.get("symbol") or row.get("종목코드") or "후보")
+    code = str(row.get("종목코드") or row.get("Code") or "").strip()
+    head = f"{rank}) {name}" + (f" ({code})" if code and code not in name else "")
+    skip = {"종목명", "Name", "symbol", "종목코드", "Code"}
+    details: list[str] = []
+    preferred = [
+        "현재가", "오늘등락률", "당일상승률", "고점대비조정", "돌파강도",
+        "거래량비율", "거래대금", "거래대금(억)", "지지선", "손바뀜이력", "바닥대비상승률",
+    ]
+    for key in preferred:
+        if key in row and key not in skip:
+            val = str(row[key])
+            label = "거래대금" if key == "거래대금(억)" else key
+            details.append(f"{label} {val}")
+    if not details:
+        for key, val in row.items():
+            if key in skip:
+                continue
+            details.append(f"{key} {val}")
+            if len(details) >= 4:
+                break
+    return head + (" · " + " / ".join(details[:4]) if details else "")
+
+
+def _summary_lowfloat_structured(records: list[dict[str, Any]]) -> list[str]:
+    rec = next((r for r in records if str(r.get("id")) == "lowfloat_fire"), None)
+    if not rec:
+        return []
+    if rec.get("error"):
+        return [f"⚠️ 요약 생성 오류: {rec['error']}"]
+
+    counts = rec.get("counts") if isinstance(rec.get("counts"), dict) else {}
+    rows = rec.get("rows") if isinstance(rec.get("rows"), list) else []
+    mode = str(rec.get("mode") or "LITE")
+    keep = [
+        f"모드: {mode} · 분석대상 {rec.get('total', '?')}개",
+        "🔥 IGNITION {ign} · 🟠 PRE {pre} · 🟡 WATCH {watch} · 🔴 LATE {late}".format(
+            ign=counts.get("IGNITION_점화", 0),
+            pre=counts.get("PRE_점화직전", 0),
+            watch=counts.get("WATCH_감시", 0),
+            late=counts.get("LATE_과열주의", 0),
+        ),
+    ]
+    if not rows:
+        keep.append("\n📌 PRE/IGNITION 후보 없음")
+        return keep
+
+    keep.append("\n📌 PRE / IGNITION TOP 5")
+    for i, row in enumerate(rows[:5], 1):
+        if not isinstance(row, dict):
+            continue
+        sig = str(row.get("화재경보") or "")
+        icon = "🔥" if sig == "IGNITION_점화" else "🟠"
+        name = str(row.get("Name") or "후보")
+        code = str(row.get("Code") or "")
+        theme = str(row.get("Theme") or "테마 미상")
+        keep.append(f"{icon} {i}) {name}" + (f" ({code})" if code else "") + f" · {theme}")
+        keep.append(
+            f"   최종 {row.get('최종점수', '?')} · 구조 {row.get('구조점수', '?')} · "
+            f"수급 {row.get('종목수급점화점수', '?')} · 테마 {row.get('테마점화점수', '?')}"
+        )
+        ar = row.get("거래대금20배")
+        r1 = row.get("ret1_%")
+        br = row.get("테마_확산도_%")
+        parts = []
+        if isinstance(ar, (int, float)): parts.append(f"거래대금 {ar:.1f}배")
+        if isinstance(r1, (int, float)): parts.append(f"오늘 {r1:+.1f}%")
+        if isinstance(br, (int, float)): parts.append(f"테마확산 {br:.0f}%")
+        if parts: keep.append("   " + " · ".join(parts))
+        fc = row.get("추정유통시총_억원")
+        mh = row.get("최대주주등지분율_%")
+        ov = row.get("희석위험프록시_%")
+        parts2 = []
+        if isinstance(fc, (int, float)): parts2.append(f"유통시총≈{fc:.0f}억")
+        if isinstance(mh, (int, float)): parts2.append(f"최대주주등 {mh:.1f}%")
+        if isinstance(ov, (int, float)): parts2.append(f"희석프록시 {ov:.1f}%")
+        if parts2: keep.append("   " + " · ".join(parts2))
+    return keep
+
+
+def _summary_leader_collection_structured(records: list[dict[str, Any]]) -> list[str]:
+    if not records:
+        return []
+    by_id = {str(r.get("id")): r for r in records if r.get("id")}
+    order = [
+        "close_bet_volume",
+        "pullback_support",
+        "breakout_60d",
+        "first_volume_candle",
+        "bottom_leader",
+        "swing_ma60_convergence",
+        "rotation_support",
+    ]
+    keep: list[str] = []
+    for sid in order:
+        rec = by_id.get(sid)
+        if not rec:
+            continue
+        title = str(rec.get("title") or sid)
+        err = rec.get("error")
+        rows = rec.get("rows") if isinstance(rec.get("rows"), list) else []
+        total = int(rec.get("total") or len(rows))
+        keep.append(f"\n📌 {title}")
+        if err:
+            keep.append(f"⚠️ 데이터 오류: {err}")
+        elif not rows:
+            keep.append("후보 없음")
+        else:
+            keep.append(f"후보 {total}개" + (" · 상위 5개 표시" if total > 5 else ""))
+            for rank, row in enumerate(rows[:5], start=1):
+                if isinstance(row, dict):
+                    keep.append(_fmt_candidate(row, rank))
+
+    close_reg = by_id.get("close_bet_regime")
+    if close_reg:
+        pct = close_reg.get("pct", "?")
+        label = close_reg.get("label", "")
+        icon = "🟢" if label == "추천" else ("🟡" if label == "주의" else "🔴")
+        keep.append(f"\n{icon} 종가배팅 레짐: {close_reg.get('score')}/{close_reg.get('max_score')} ({pct}%) · {label}")
+
+    swing_reg = by_id.get("swing_regime")
+    if swing_reg:
+        pct = swing_reg.get("pct", "?")
+        label = swing_reg.get("label", "")
+        icon = "🟢" if label == "추천" else ("🟡" if label == "선별 진입" else "🔴")
+        keep.append(f"{icon} 스윙 레짐: {swing_reg.get('score')}/{swing_reg.get('max_score')} ({pct}%) · {label}")
+        warnings = swing_reg.get("warnings") if isinstance(swing_reg.get("warnings"), list) else []
+        if warnings:
+            keep.append("⚠️ 보유자 경고: " + " / ".join(map(str, warnings[:3])))
+    return keep
+
+
 def _summary_leader_collection(lines: list[str]) -> list[str]:
     keep: list[str] = []
     for i, line in enumerate(lines):
@@ -431,6 +583,7 @@ def _summary_leader_all(lines: list[str]) -> list[str]:
 
 def build_summary(job: JobConfig, status: str, duration: float, text: str, error_count: int, files: list[Path]) -> str:
     lines = _clean_lines(text)
+    tg_records = _extract_tg_records(text)
 
     if job.id == "news":
         picked = _summary_news(lines)
@@ -439,7 +592,9 @@ def build_summary(job: JobConfig, status: str, duration: float, text: str, error
     elif job.id == "leader_all":
         picked = _summary_leader_all(lines)
     elif job.id == "leader_collection":
-        picked = _summary_leader_collection(lines)
+        picked = _summary_leader_collection_structured(tg_records) or _summary_leader_collection(lines)
+    elif job.id == "lowfloat_fire":
+        picked = _summary_lowfloat_structured(tg_records)
     else:
         picked = _summary_crypto(lines)
 
@@ -503,12 +658,14 @@ def run_notebook_job(project_root: Path, output_root: Path, state_dir: Path, job
             "프로그램은 정상 종료됐지만 현재 공개 데이터원에서 충분한 자료를 받지 못했습니다",
         )
         semantic_failure = any(marker in notebook_text for marker in semantic_failure_markers)
+        tg_records = _extract_tg_records(notebook_text)
+        structured_error = any(bool(r.get("error")) for r in tg_records)
 
         if timed_out:
             status = "TIMEOUT"
         elif not executed.is_file():
             status = "FAILED"
-        elif cell_errors or semantic_failure:
+        elif cell_errors or semantic_failure or structured_error:
             status = "PARTIAL"
         elif return_code == 0:
             status = "SUCCESS"

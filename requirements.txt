@@ -13,3 +13,6 @@ ipykernel>=6.29,<7
 jupyter-client>=8.6,<9
 jedi>=0.19,<1
 setuptools>=78,<83
+
+beautifulsoup4>=4.12,<5
+lxml>=5,<7

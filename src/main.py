@@ -17,7 +17,7 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="5개 시장 노트북 실행 및 Telegram 자동전송")
+    parser = argparse.ArgumentParser(description="6개 시장 노트북 실행 및 Telegram 자동전송")
     parser.add_argument("--jobs", default=os.getenv("RUN_JOBS", "all"), help="all 또는 job id 쉼표 목록")
     parser.add_argument("--no-telegram", action="store_true", help="실행만 하고 Telegram 전송 생략")
     parser.add_argument("--no-documents", action="store_true", help="Telegram 파일 첨부 생략")

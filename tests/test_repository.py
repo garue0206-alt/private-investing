@@ -17,9 +17,9 @@ class RepositoryTests(unittest.TestCase):
         cls.root = Path(__file__).resolve().parents[1]
         cls.jobs = load_jobs(cls.root)
 
-    def test_exactly_five_jobs(self) -> None:
-        self.assertEqual(len(self.jobs), 5)
-        self.assertEqual(len({j.id for j in self.jobs}), 5)
+    def test_exactly_six_jobs(self) -> None:
+        self.assertEqual(len(self.jobs), 6)
+        self.assertEqual(len({j.id for j in self.jobs}), 6)
 
     def test_job_selection(self) -> None:
         selected = select_jobs(self.jobs, "news,alt_bull")
