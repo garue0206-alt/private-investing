@@ -1,22 +1,22 @@
-name: Run 5 Market Screeners
+name: Run 6 Market Screeners - Daily 0100 UTC
 
 on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "all 또는 leader_all,alt_bull,news,leader_collection,crypto_collection"
+        description: "all 또는 leader_all,alt_bull,news,leader_collection,crypto_collection,lowfloat_fire"
         required: true
         default: "all"
         type: string
       send_documents:
-        description: "CSV/로그 파일도 Telegram으로 전송"
+        description: "CSV/결과 파일도 Telegram으로 전송"
         required: true
         default: true
         type: boolean
+
   schedule:
-    # 한국시간 평일 16:35. 정각 혼잡을 피하기 위해 35분으로 설정.
-    - cron: "35 16 * * 1-5"
-      timezone: "Asia/Seoul"
+    # 매일 01:00 UTC = 한국시간 10:00 KST
+    - cron: "0 1 * * *"
 
 permissions:
   contents: read
@@ -29,12 +29,14 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+
     env:
       PYTHONUTF8: "1"
       PYTHONUNBUFFERED: "1"
       TZ: "Asia/Seoul"
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
 
     steps:
       - name: Checkout
@@ -68,16 +70,22 @@ jobs:
           python scripts/validate_repo.py
           python -m unittest discover -s tests -v
 
-      - name: Run screeners and send Telegram
+      - name: Run all screeners and send Telegram
         id: screeners
         continue-on-error: true
         shell: bash
         run: |
           JOBS="${{ github.event.inputs.jobs }}"
           SEND_DOCUMENTS="${{ github.event.inputs.send_documents }}"
+
+          # 예약 실행(schedule)에서는 입력값이 없으므로 자동으로 전체 6개 실행
           if [ -z "$JOBS" ]; then JOBS="all"; fi
+
           EXTRA_ARGS=""
-          if [ "$SEND_DOCUMENTS" = "false" ]; then EXTRA_ARGS="--no-documents"; fi
+          if [ "$SEND_DOCUMENTS" = "false" ]; then
+            EXTRA_ARGS="--no-documents"
+          fi
+
           python -m src.main --jobs "$JOBS" $EXTRA_ARGS
 
       - name: Save screener state
