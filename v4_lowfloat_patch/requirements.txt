@@ -1,0 +1,18 @@
+# Python 3.11 기준. 지나치게 빡빡한 고정 버전 대신 호환 범위를 사용합니다.
+requests>=2.32,<3
+pandas>=2.2,<3
+numpy>=1.26,<3
+matplotlib>=3.8,<4
+ccxt==4.5.67
+finance-datareader==0.9.202
+feedparser==6.0.12
+tqdm>=4.66,<5
+nbformat>=5.10,<6
+nbconvert==7.17.1
+ipykernel>=6.29,<7
+jupyter-client>=8.6,<9
+jedi>=0.19,<1
+setuptools>=78,<83
+
+beautifulsoup4>=4.12,<5
+lxml>=5,<7
