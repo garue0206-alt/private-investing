@@ -122,7 +122,12 @@ def main() -> int:
             print("-", error)
 
     # 실행 노트북이 실패하거나 Telegram 전송이 실패하면 Actions를 빨간색으로 표시.
-    unhealthy = any(r.status in {"FAILED", "TIMEOUT", "PARTIAL"} for r in results)
+    # PARTIAL 중에서도 셀 오류가 없는 데이터원 일부 누락은 결과가 생성된 상태이므로
+    # 매일 자동 실행 전체를 빨간색으로 만들지 않는다. 실제 셀 오류/실패/시간초과는 실패 처리한다.
+    unhealthy = any(
+        r.status in {"FAILED", "TIMEOUT"} or (r.status == "PARTIAL" and r.cell_error_count > 0)
+        for r in results
+    )
     if not args.no_telegram and telegram_errors:
         unhealthy = True
     return 1 if unhealthy else 0

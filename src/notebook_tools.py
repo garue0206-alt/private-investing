@@ -387,7 +387,7 @@ def _summary_lowfloat_structured(records: list[dict[str, Any]]) -> list[str]:
     if not rec:
         return []
     if rec.get("error"):
-        return [f"⚠️ 요약 생성 오류: {rec['error']}"]
+        return [f"⚠️ 품절주 스크리너 내부 오류: {rec['error']}"]
 
     counts = rec.get("counts") if isinstance(rec.get("counts"), dict) else {}
     rows = rec.get("rows") if isinstance(rec.get("rows"), list) else []
@@ -401,6 +401,9 @@ def _summary_lowfloat_structured(records: list[dict[str, Any]]) -> list[str]:
             late=counts.get("LATE_과열주의", 0),
         ),
     ]
+    warnings = rec.get("warnings") if isinstance(rec.get("warnings"), list) else []
+    if warnings:
+        keep.append("⚠️ 데이터 주의: " + " / ".join(map(str, warnings[:3])))
     if not rows:
         keep.append("\n📌 PRE/IGNITION 후보 없음")
         return keep
