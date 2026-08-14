@@ -1,0 +1,121 @@
+name: Weekday 6 Market Screeners - 09:20 & 14:20 KST
+
+on:
+  schedule:
+    # 00:20 UTC = 09:20 KST, 05:20 UTC = 14:20 KST
+    # KST는 UTC+9이며 DST가 없으므로 UTC cron으로 고정합니다.
+    - cron: "20 0,5 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekday-6-market-screeners
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    env:
+      PYTHONUTF8: "1"
+      PYTHONUNBUFFERED: "1"
+      TZ: "Asia/Seoul"
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+
+    steps:
+      - name: Verify scheduled start window
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "schedule" ]; then
+            echo "Unexpected trigger: $GITHUB_EVENT_NAME"
+            exit 1
+          fi
+
+          python - <<'PY'
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+
+          now = datetime.now(ZoneInfo("Asia/Seoul"))
+          slots = [
+              now.replace(hour=9, minute=20, second=0, microsecond=0),
+              now.replace(hour=14, minute=20, second=0, microsecond=0),
+          ]
+
+          # GitHub Actions 예약 실행은 서버 부하로 지연될 수 있으므로
+          # 예정시각 5분 전부터 90분 후까지만 허용합니다.
+          valid = any(
+              slot - timedelta(minutes=5) <= now <= slot + timedelta(minutes=90)
+              for slot in slots
+          )
+
+          print("KST now:", now.strftime("%Y-%m-%d %H:%M:%S %Z"))
+          print("Expected slots: 09:20 KST / 14:20 KST")
+
+          if not valid:
+              raise SystemExit(
+                  "Blocked: current KST time is outside the allowed scheduled windows."
+              )
+          PY
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m ipykernel install --user --name python3 --display-name "Python 3"
+
+      - name: Restore screener state
+        uses: actions/cache/restore@v5
+        with:
+          path: state
+          key: screener-state-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            screener-state-${{ runner.os }}-
+
+      - name: Validate repository and notebooks
+        run: |
+          python scripts/validate_repo.py
+          python -m unittest discover -s tests -v
+
+      - name: Run all 6 screeners and send Telegram
+        id: screeners
+        continue-on-error: true
+        run: |
+          python -m src.main --jobs all
+
+      - name: Save screener state
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: state
+          key: screener-state-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Upload all results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-screeners-${{ github.run_id }}
+          path: outputs/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Mark workflow failed when a screener failed
+        if: always() && steps.screeners.outcome != 'success'
+        run: |
+          echo "한 개 이상의 스크리너 또는 Telegram 전송이 실패했습니다."
+          exit 1
